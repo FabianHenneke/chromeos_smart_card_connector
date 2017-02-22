@@ -44,137 +44,150 @@ goog.require('goog.log.Logger');
 
 goog.scope(function() {
 
-/** @const */
-var GSC = GoogleSmartCard;
+  /** @const */
+  var GSC = GoogleSmartCard;
 
-/** @const */
-var Constants = GSC.PcscLiteCommon.Constants;
+  /** @const */
+  var Constants = GSC.PcscLiteCommon.Constants;
 
-/**
- * Client title for the connection to the server App.
- *
- * Currently this is only used for the debug logs produced by the server App.
- * @const
- */
-var CLIENT_TITLE = 'example_js_client_app';
+  const API = GoogleSmartCard.PcscLiteClient.API;
 
-/**
- * Identifier of the server App.
- * @const
- */
-var SERVER_APP_ID = Constants.SERVER_OFFICIAL_APP_ID;
+  /**
+   * Client title for the connection to the server App.
+   *
+   * Currently this is only used for the debug logs produced by the server App.
+   * @const
+   */
+  var CLIENT_TITLE = 'example_js_client_app';
 
-/**
- * Logger that should be used for logging the App log messages.
- * @type {!goog.log.Logger}
- * @const
- */
-var logger = GSC.Logging.getLogger(
+  /**
+   * Identifier of the server App.
+   * @const
+   */
+  var SERVER_APP_ID = Constants.SERVER_OFFICIAL_APP_ID;
+
+  /**
+   * Logger that should be used for logging the App log messages.
+   * @type {!goog.log.Logger}
+   * @const
+   */
+  var logger = GSC.Logging.getLogger(
     'SmartCardClientApp',
     goog.DEBUG ? goog.log.Level.FINE : goog.log.Level.INFO);
 
-/**
- * Context for using the PC/SC-Lite client API.
- *
- * This object establishes and manages a connection to the server App. Upon
- * successful connection, a GoogleSmartCard.PcscLiteClient.API object is
- * returned through the callback, that allows to perform PC/SC-Lite client API
- * requests.
- * @type {GSC.PcscLiteClient.Context}
- */
-var context = null;
+  /**
+   * Context for using the PC/SC-Lite client API.
+   *
+   * This object establishes and manages a connection to the server App. Upon
+   * successful connection, a GoogleSmartCard.PcscLiteClient.API object is
+   * returned through the callback, that allows to perform PC/SC-Lite client API
+   * requests.
+   * @type {GSC.PcscLiteClient.Context}
+   */
+  var context = null;
 
-/**
- * Initiates the PC/SC-Lite client API context initialization.
- */
-function initializeContext() {
-  GSC.Logging.checkWithLogger(logger, goog.isNull(context));
-  context = new GSC.PcscLiteClient.Context(CLIENT_TITLE, SERVER_APP_ID);
-  context.addOnInitializedCallback(contextInitializedListener);
-  context.addOnDisposeCallback(contextDisposedListener);
-  context.initialize();
-}
-
-/**
- * This callback is called when the PC/SC-Lite client API context is
- * successfully initialized.
- * @param {!GSC.PcscLiteClient.API} api Object that allows to perform PC/SC-Lite
- * client API requests.
- */
-function contextInitializedListener(api) {
-  logger.info('Successfully connected to the server app');
-  work(api);
-}
-
-/**
- * This callback is called when the PC/SC-Lite client API context is disposed
- * (either it failed to initialize or was disposed later due to some error).
- *
- * The GoogleSmartCard.PcscLiteClient.API that was supplied previously also
- * becomes disposed at this point (if not disposed yet).
- */
-function contextDisposedListener() {
-  logger.warning('Connection to the server app was shut down');
-  context = null;
-  stopWork();
-}
-
-/**
- * This function is executed when the context for using PC/SC-Lite client API is
- * initialized successfully.
- * @param {!GSC.PcscLiteClient.API} api Object that allows to perform PC/SC-Lite
- * client API requests.
- */
-function work(api) {
-  //
-  // CHANGE HERE:
-  // Place your custom code working with PC/SC-Lite client API here:
-  //
-
-  function runPcscLiteDemo(callback) {
-    logger.info('Starting PC/SC-Lite demo...');
-    GSC.PcscLiteClient.Demo.logger.setLevel(goog.log.Level.FINE);
-    GSC.PcscLiteClient.Demo.run(api, function() {
-      logger.info('PC/SC-Lite demo successfully finished');
-      callback();
-    }, function() {
-      logger.warning('PC/SC-Lite demo failed');
-      callback();
-    });
+  /**
+   * Initiates the PC/SC-Lite client API context initialization.
+   */
+  function initializeContext() {
+    GSC.Logging.checkWithLogger(logger, goog.isNull(context));
+    context = new GSC.PcscLiteClient.Context(CLIENT_TITLE, SERVER_APP_ID);
+    context.addOnInitializedCallback(contextInitializedListener);
+    context.addOnDisposeCallback(contextDisposedListener);
+    context.initialize();
   }
 
-  function runPinDialogDemo() {
-    logger.info('Starting PIN dialog demo...');
-    var pinPromise = SmartCardClientApp.PinDialog.Server.requestPin();
-    pinPromise.then(function(pin) {
-      logger.info('PIN dialog demo finished: received PIN "' + pin + '"');
-    }, function(error) {
-      logger.info('PIN dialog demo finished: ' + error);
-    });
+  /**
+   * This callback is called when the PC/SC-Lite client API context is
+   * successfully initialized.
+   * @param {!GSC.PcscLiteClient.API} api Object that allows to perform PC/SC-Lite
+   * client API requests.
+   */
+  function contextInitializedListener(api) {
+    logger.info('Successfully connected to the server app');
+    work(api);
   }
 
-  runPcscLiteDemo(runPinDialogDemo);
-}
+  /**
+   * This callback is called when the PC/SC-Lite client API context is disposed
+   * (either it failed to initialize or was disposed later due to some error).
+   *
+   * The GoogleSmartCard.PcscLiteClient.API that was supplied previously also
+   * becomes disposed at this point (if not disposed yet).
+   */
+  function contextDisposedListener() {
+    logger.warning('Connection to the server app was shut down');
+    context = null;
+    stopWork();
+  }
 
-/**
- * This function is executed when the PC/SC-Lite client API context is disposed
- * (either because it failed to initialize or because it was disposed later due
- * to some error).
- *
- * The GoogleSmartCard.PcscLiteClient.API that was supplied to the work function
- * also becomes disposed at this point (if not disposed yet).
- */
-function stopWork() {
-  //
-  // CHANGE HERE:
-  // Place your custom deinitialization code here:
-  //
-}
+  let getp = sCardPromise => sCardPromise.then(result => new Promise(
+    function(resolve, reject) {
+      result.get((...args) => args.length > 1 ? resolve(args) : resolve(
+        args[0]), reject);
+    }).catch(error => console.log(error)));
 
-initializeContext();
+  /**
+   * This function is executed when the context for using PC/SC-Lite client API is
+   * initialized successfully.
+   * @param {!GSC.PcscLiteClient.API} api Object that allows to perform PC/SC-Lite
+   * client API requests.
+   */
+  async function work(api) {
+    //
+    // CHANGE HERE:
+    // Place your custom code working with PC/SC-Lite client API here:
+    //
+    console.log('Establishing context...');
+    try {
+      let sCardContext = await getp(api.SCardEstablishContext(API.SCARD_SCOPE_SYSTEM,
+        null, null));
+      console.log(sCardContext);
+      await getp(api.SCardIsValidContext(sCardContext));
+      let readers = await getp(api.SCardListReaders(sCardContext, null));
+      console.log(readers);
+      let readerName = readers[0];
+      let result = await getp(api.SCardConnect(sCardContext, readerName,
+        API.SCARD_SHARE_SHARED,
+        API.SCARD_PROTOCOL_ANY));
+      let sCardHandle = result[0];
+      let activeProtocol = result[1];
+      console.log(sCardHandle, activeProtocol);
+    } catch (pcscError) {
+      logPcscError(api, pcscError);
+      return;
+    }
+  }
 
-GSC.AppUtils.enableSelfAutoLoading();
+  async function logPcscError(api, errorCode) {
+    console.log('failed: PC/SC-Lite error: ' + errorCode);
+    try {
+      let errorText = await api.pcsc_stringify_error(errorCode);
+      console.log('PC/SC-Lite error text: ' + errorText);
+    } catch (error) {
+      console.log(error);
+    }
+  }
 
-GSC.BackgroundPageUnloadPreventing.enable();
+  /**
+   * This function is executed when the PC/SC-Lite client API context is disposed
+   * (either because it failed to initialize or because it was disposed later due
+   * to some error).
+   *
+   * The GoogleSmartCard.PcscLiteClient.API that was supplied to the work function
+   * also becomes disposed at this point (if not disposed yet).
+   */
+  function stopWork() {
+    //
+    // CHANGE HERE:
+    // Place your custom deinitialization code here:
+    //
+  }
 
-});  // goog.scope
+  initializeContext();
+
+  GSC.AppUtils.enableSelfAutoLoading();
+
+  GSC.BackgroundPageUnloadPreventing.enable();
+
+}); // goog.scope

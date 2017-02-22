@@ -80,6 +80,7 @@ JS_BUILD_COMPILATION_FLAGS := \
 endif
 
 JS_BUILD_COMPILATION_FLAGS += \
+	--language_in=ECMASCRIPT8 \
 	--closure_entry_point=goog \
 	--compilation_level=SIMPLE \
 	--jscomp_error=accessControls \
