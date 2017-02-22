@@ -127,6 +127,33 @@ goog.scope(function() {
         args[0]), reject);
     }).catch(error => console.log(error)));
 
+  function toPci(protocol) {
+    return protocol == API.SCARD_PROTOCOL_T0 ?
+      API.SCARD_PCI_T0 :
+      API.SCARD_PCI_T1;
+  }
+
+  function parseResult(result) {
+    let data = result[1].slice(0, -2);
+    let returnCode = result[1].slice(-2);
+    if (!(returnCode[0] == 0x90 && returnCode[1] == 0x00))
+      console.log('Operation returned:', returnCode);
+    return data;
+  }
+
+  function bytesToString(bytes) {
+    let str = '';
+    for (let i = 0; i < bytes.length; i++)
+      str += String.fromCharCode(bytes[i]);
+    return str;
+  }
+
+  const SELECT_FILE_APDU = [0x00, 0xA4, 0x04, 0x00, 0x06, 0xD2, 0x76, 0x00,
+    0x01, 0x24, 0x01, 0x00
+  ];
+  const GET_DATA_CARDHOLDER_APDU = [0x00, 0xCA, 0x00, 0x65, 0x00];
+  const GET_DATA_URL_APDU = [0x00, 0xCA, 0x5F, 0x50, 0x00];
+
   /**
    * This function is executed when the context for using PC/SC-Lite client API is
    * initialized successfully.
@@ -134,12 +161,8 @@ goog.scope(function() {
    * client API requests.
    */
   async function work(api) {
-    //
-    // CHANGE HERE:
-    // Place your custom code working with PC/SC-Lite client API here:
-    //
-    console.log('Establishing context...');
     try {
+      // Connect
       let sCardContext = await getp(api.SCardEstablishContext(API.SCARD_SCOPE_SYSTEM,
         null, null));
       console.log(sCardContext);
@@ -153,6 +176,26 @@ goog.scope(function() {
       let sCardHandle = result[0];
       let activeProtocol = result[1];
       console.log(sCardHandle, activeProtocol);
+      let transmit = api.SCardTransmit.bind(api, sCardHandle,
+        toPci(activeProtocol));
+
+      // Select OpenPGP applet
+      let status = (await getp(transmit(SELECT_FILE_APDU)))[1];
+      if (!(status[0] === 0x90 && status[1] === 0x00)) {
+        console.log('Can\'t connect to OpenPGP applet.');
+        return;
+      }
+
+      // Request cardholder data and public key url
+      result = await getp(transmit(GET_DATA_CARDHOLDER_APDU));
+      console.log(parseResult(result));
+      result = await getp(transmit(GET_DATA_URL_APDU));
+      let url = bytesToString(parseResult(result));
+      console.log('URL: ' + url);
+
+      // Disconnect
+      await getp(api.SCardDisconnect(sCardHandle, API.SCARD_LEAVE_CARD));
+      await getp(api.SCardReleaseContext(sCardContext));
     } catch (pcscError) {
       logPcscError(api, pcscError);
       return;
