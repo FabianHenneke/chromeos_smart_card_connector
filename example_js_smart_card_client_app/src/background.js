@@ -137,7 +137,7 @@ goog.scope(function() {
     let data = result[1].slice(0, -2);
     let returnCode = result[1].slice(-2);
     if (!(returnCode[0] == 0x90 && returnCode[1] == 0x00))
-      console.log('Operation returned:', returnCode);
+      console.log('Operation returned specific status bytes:', returnCode);
     return data;
   }
 
@@ -148,11 +148,49 @@ goog.scope(function() {
     return str;
   }
 
+  // Taken from:
+  // http://stackoverflow.com/a/18729931
+  function utf8ToBytes(str) {
+    var utf8 = [str.length];
+    for (var i = 0; i < str.length; i++) {
+      var charcode = str.charCodeAt(i);
+      if (charcode < 0x80) utf8.push(charcode);
+      else if (charcode < 0x800) {
+        utf8.push(0xc0 | (charcode >> 6),
+          0x80 | (charcode & 0x3f));
+      } else if (charcode < 0xd800 || charcode >= 0xe000) {
+        utf8.push(0xe0 | (charcode >> 12),
+          0x80 | ((charcode >> 6) & 0x3f),
+          0x80 | (charcode & 0x3f));
+      }
+      // surrogate pair
+      else {
+        i++;
+        // UTF-16 encodes 0x10000-0x10FFFF by
+        // subtracting 0x10000 and splitting the
+        // 20 bits of 0x0-0xFFFFF into two halves
+        charcode = 0x10000 + (((charcode & 0x3ff) << 10) |
+          (str.charCodeAt(i) & 0x3ff))
+        utf8.push(0xf0 | (charcode >> 18),
+          0x80 | ((charcode >> 12) & 0x3f),
+          0x80 | ((charcode >> 6) & 0x3f),
+          0x80 | (charcode & 0x3f));
+      }
+    }
+    return utf8;
+  }
+
   const SELECT_FILE_APDU = [0x00, 0xA4, 0x04, 0x00, 0x06, 0xD2, 0x76, 0x00,
     0x01, 0x24, 0x01, 0x00
   ];
   const GET_DATA_CARDHOLDER_APDU = [0x00, 0xCA, 0x00, 0x65, 0x00];
   const GET_DATA_URL_APDU = [0x00, 0xCA, 0x5F, 0x50, 0x00];
+  const VERIFY_APDU = [0x00, 0x20, 0x00, 0x81];
+  const PSO_CDS_APDU = [0x00, 0x2A, 0x9E, 0x9A];
+  const RSA_SHA1_DIGEST_INFO = [0x30, 0x51, 0x30, 0x0D, 0x06, 0x09, 0x60,
+    0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04,
+    0x40
+  ];
 
   /**
    * This function is executed when the context for using PC/SC-Lite client API is
@@ -192,6 +230,38 @@ goog.scope(function() {
       result = await getp(transmit(GET_DATA_URL_APDU));
       let url = bytesToString(parseResult(result));
       console.log('URL: ' + url);
+
+      // Request PIN
+      let pinBytes = [];
+      try {
+        let pin = await SmartCardClientApp.PinDialog.Server.requestPin();
+        console.log('PIN dialog: PIN=' + pin);
+        pinBytes = utf8ToBytes(pin);
+        console.log('Encoded PIN: ', pinBytes);
+      } catch (error) {
+        console.log('PIN dialog: ' + error);
+        return;
+      }
+
+      // Verify PIN
+      result = await getp(transmit(VERIFY_APDU.concat(pinBytes)));
+      console.log(parseResult(result));
+
+      // Sign
+      // let message = 'Hello YubiKey!';
+      // Precomputed SHA512 hash
+      let hash = [0xfb, 0xd6, 0x35, 0x88, 0x31, 0x09, 0x2c, 0xde, 0x71,
+        0xcb, 0x42, 0x11, 0x89, 0x35, 0x10, 0xb3, 0xc9, 0x3b, 0x4d, 0x4c,
+        0x21, 0xa9, 0x53, 0xbf, 0x46, 0x37, 0x68, 0x19, 0x7a, 0xe4, 0x11,
+        0x9f, 0xa8, 0x8d, 0xe8, 0x0a, 0xbd, 0xa1, 0xc2, 0x0c, 0x03, 0x5f,
+        0x70, 0xae, 0x55, 0x1a, 0xfe, 0xe3, 0xe7, 0xa8, 0x27, 0x67, 0xa6,
+        0x5b, 0xb6, 0xcb, 0xce, 0x08, 0xd2, 0xfe, 0xbf, 0x93, 0x60, 0x71
+      ];
+      let digestInfo = RSA_SHA1_DIGEST_INFO.concat(hash);
+      result = await getp(transmit(PSO_CDS_APDU.concat([digestInfo.length])
+        .concat(digestInfo).concat([0x00])));
+      let signature = parseResult(result);
+      console.log(signature);
 
       // Disconnect
       await getp(api.SCardDisconnect(sCardHandle, API.SCARD_LEAVE_CARD));
