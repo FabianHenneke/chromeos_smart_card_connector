@@ -134,13 +134,14 @@ goog.scope(function() {
   }
 
   async function getData(result, transmit) {
+    result[1] = new Uint8Array(result[1]);
     let data = result[1].slice(0, -2);
     let returnCode = result[1].slice(-2);
     if (returnCode[0] === 0x61) {
       console.log('Data continues with ' + returnCode[1] + ' bytes.');
       let result = await getp(transmit(GET_RESPONSE_APDU));
       let dataContinued = await getData(result, transmit);
-      data = data.concat(dataContinued);
+      data = concatenateUint8(data, dataContinued);
     } else if (!(returnCode[0] === 0x90 && returnCode[1] === 0x00))
       console.log('Operation returned specific status bytes:', returnCode);
     return data;
@@ -192,22 +193,111 @@ goog.scope(function() {
           0x80 | (charcode & 0x3f));
       }
     }
-    return utf8;
+    return new Uint8Array(utf8);
   }
 
-  const SELECT_FILE_APDU = [0x00, 0xA4, 0x04, 0x00, 0x06, 0xD2, 0x76, 0x00,
-    0x01, 0x24, 0x01, 0x00
-  ];
-  const GET_DATA_CARDHOLDER_APDU = [0x00, 0xCA, 0x00, 0x65, 0x00];
-  const GET_DATA_URL_APDU = [0x00, 0xCA, 0x5F, 0x50, 0x00];
-  const GET_DATA_DSC_APDU = [0x00, 0xCA, 0x00, 0x7A, 0x00];
-  const VERIFY_APDU = [0x00, 0x20, 0x00, 0x81];
-  const PSO_CDS_APDU = [0x00, 0x2A, 0x9E, 0x9A];
-  const RSA_SHA1_DIGEST_INFO = [0x30, 0x51, 0x30, 0x0D, 0x06, 0x09, 0x60,
-    0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04,
-    0x40
-  ];
-  const GET_RESPONSE_APDU = [0x00, 0xC0, 0x00, 0x00, 0x00];
+  function uint32ToBytes(v_uint32) {
+    let bytes = new Uint8Array(4);
+    let view = new DataView(bytes.buffer);
+    view.setUint32(0, v_uint32);
+    return bytes;
+  }
+
+  function concatenateUint8(...arrays) {
+    const totalLength = arrays.reduce((total, array) => total + array.length,
+      0);
+    const result = new Uint8Array(totalLength);
+    arrays.reduce((offset, array) => {
+      result.set(array, offset);
+      return offset + array.length;
+    }, 0);
+    return result;
+  }
+
+  // TODO: This should be replaced by proper TLV list parsing
+  function extractFingerprints(applicationData) {
+    let fingerprintIndex = -1;
+    for (let i = 0; i < applicationData.length; i++) {
+      if (applicationData[i] === 0xC5) { // Fingerprints
+        if (applicationData[i + 1] === 60) { // Length: 60 bytes
+          if (fingerprintIndex === -1) {
+            fingerprintIndex = i + 2;
+          } else {
+            console.log('Error: Found multiple occurences of "0xC5 0x3C"');
+          }
+        }
+      }
+    }
+    if (fingerprintIndex === -1) {
+      console.log('Error: Fingerprints not found');
+      return [];
+    }
+    return applicationData.slice(fingerprintIndex, fingerprintIndex + 60);
+  }
+
+  // Create the parts of an OpenPGP Version 4 Signature Packet for binary data
+  // see: https://tools.ietf.org/html/rfc4880#section-5.2.3
+  function createSignaturePackage(data, issuerBytes) {
+    const SIGNATURE_PACKET_HEADER = new Uint8Array([
+      0x04, /* version number */
+      0x00, /* signature type (fixed to binary) */
+      0x01, /* public-key algorithm (fixed to "RSA (encrypt or sign)") */
+      0x0A, /* signature algorithm (fixed to SHA512) */
+    ]);
+    const HASHED_SUBPACKETS_HEADER = new Uint8Array([
+      0x00,
+      0x06, /* length of all hashed subpackets (creation time (6 octets)) */
+    ]);
+    const CREATION_TIME_SUBPACKET_HEADER = new Uint8Array([
+      0x05, /* length of the subpacket (type (1 octet) + time (4 octets)) */
+      0x02, /* subpacket type: Signature Creation Time */
+    ]);
+
+    const time = Math.floor(Date.now() / 1000); // seconds since epoch
+    const timeBytes = uint32ToBytes(time);
+
+    const hashedPart = concatenateUint8(
+      SIGNATURE_PACKET_HEADER, HASHED_SUBPACKETS_HEADER,
+      CREATION_TIME_SUBPACKET_HEADER, timeBytes);
+    console.log('Hashed part: ', hashedPart);
+
+    //const dataToHash = data.concat(hashedPart);
+    const hashBytes = /* TODO */ new Uint8Array([0, 0]);
+
+    const UNHASHED_SUBPACKETS_HEADER = new Uint8Array([
+      0x00,
+      0x0A, /* length of all unhashed subpackets (issuer (10 octets)) */
+    ]);
+    const ISSUER_SUBPACKET_HEADER = new Uint8Array([
+      0x09, /* length of the subpacket (type (1 octet) + key id (8 octets)) */
+      0x10, /* subpacket type: Issuer */
+    ]);
+
+    const unhashedPart = concatenateUint8(UNHASHED_SUBPACKETS_HEADER,
+      ISSUER_SUBPACKET_HEADER, issuerBytes, hashBytes.slice(-2));
+    console.log('Unhashed part: ', unhashedPart);
+
+    return [concatenateUint8(hashedPart, unhashedPart), hashBytes];
+  }
+
+  const SELECT_FILE_APDU = new Uint8Array([0x00, 0xA4, 0x04, 0x00, 0x06,
+    0xD2, 0x76, 0x00, 0x01, 0x24, 0x01, 0x00
+  ]);
+  const GET_DATA_CARDHOLDER_APDU = new Uint8Array([0x00, 0xCA, 0x00, 0x65,
+    0x00
+  ]);
+  const GET_DATA_APPLICATION_RELATED_DATA_APDU = new Uint8Array([0x00, 0xCA,
+    0x00, 0x6E, 0x00
+  ]);
+  const GET_DATA_URL_APDU = new Uint8Array([0x00, 0xCA, 0x5F, 0x50, 0x00]);
+  const GET_DATA_DSC_APDU = new Uint8Array([0x00, 0xCA, 0x00, 0x7A, 0x00]);
+  const VERIFY_APDU = new Uint8Array([0x00, 0x20, 0x00, 0x81]);
+  const PSO_CDS_APDU = new Uint8Array([0x00, 0x2A, 0x9E, 0x9A]);
+  const RSA_SHA1_DIGEST_INFO = new Uint8Array([0x30, 0x51, 0x30, 0x0D, 0x06,
+    0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05,
+    0x00, 0x04, 0x40
+  ]);
+  const GET_RESPONSE_APDU = new Uint8Array([0x00, 0xC0, 0x00, 0x00, 0x00]);
 
   /**
    * This function is executed when the context for using PC/SC-Lite client API is
@@ -231,8 +321,8 @@ goog.scope(function() {
       let sCardHandle = result[0];
       let activeProtocol = result[1];
       console.log(sCardHandle, activeProtocol);
-      let transmit = api.SCardTransmit.bind(api, sCardHandle,
-        toPci(activeProtocol));
+      let transmit = apduBytes => api.SCardTransmit(sCardHandle, toPci(
+        activeProtocol), Array.from(apduBytes));
 
       // Select OpenPGP applet
       let status = (await getp(transmit(SELECT_FILE_APDU)))[1];
@@ -250,22 +340,26 @@ goog.scope(function() {
       let url = bytesToString(data);
       console.log('URL: ' + url);
 
+      // Request application related data
+      result = await getp(transmit(GET_DATA_APPLICATION_RELATED_DATA_APDU));
+      data = await getData(result, transmit);
+      let fingerprints = extractFingerprints(data);
+      let sigKeyId = fingerprints.slice(12, 20); // get last 8 octets of sig key
+      console.log('Signature Key ID: ', sigKeyId);
+
       // Request PIN
       let pinBytes = [];
       try {
         let pin = await SmartCardClientApp.PinDialog.Server.requestPin();
-        console.log('PIN dialog: PIN=' + pin);
         pinBytes = utf8ToBytes(pin);
-        console.log('Encoded PIN: ', pinBytes);
       } catch (error) {
         console.log('PIN dialog: ' + error);
         return;
       }
 
       // Verify PIN
-      result = await getp(transmit(VERIFY_APDU.concat(pinBytes)));
+      result = await getp(transmit(concatenateUint8(VERIFY_APDU, pinBytes)));
       data = await getData(result, transmit);
-      console.log(data);
 
       // Get digital signature counter
       result = await getp(transmit(GET_DATA_DSC_APDU));
@@ -273,20 +367,18 @@ goog.scope(function() {
       console.log('DSC: ', parseDSC(data));
 
       // Sign
-      // let message = 'Hello YubiKey!';
-      // Precomputed SHA512 hash
-      let hash = [0xfb, 0xd6, 0x35, 0x88, 0x31, 0x09, 0x2c, 0xde, 0x71,
-        0xcb, 0x42, 0x11, 0x89, 0x35, 0x10, 0xb3, 0xc9, 0x3b, 0x4d, 0x4c,
-        0x21, 0xa9, 0x53, 0xbf, 0x46, 0x37, 0x68, 0x19, 0x7a, 0xe4, 0x11,
-        0x9f, 0xa8, 0x8d, 0xe8, 0x0a, 0xbd, 0xa1, 0xc2, 0x0c, 0x03, 0x5f,
-        0x70, 0xae, 0x55, 0x1a, 0xfe, 0xe3, 0xe7, 0xa8, 0x27, 0x67, 0xa6,
-        0x5b, 0xb6, 0xcb, 0xce, 0x08, 0xd2, 0xfe, 0xbf, 0x93, 0x60, 0x71
-      ];
-      let digestInfo = RSA_SHA1_DIGEST_INFO.concat(hash);
-      result = await getp(transmit(PSO_CDS_APDU.concat([digestInfo.length])
-        .concat(digestInfo).concat([0x00])));
+      let packageAndHash = createSignaturePackage('Hello YubiKey!',
+        sigKeyId);
+      let digestInfo = concatenateUint8(RSA_SHA1_DIGEST_INFO,
+        packageAndHash[1]);
+      let signCommand = concatenateUint8(PSO_CDS_APDU, new Uint8Array([
+        digestInfo.length
+      ]), digestInfo, new Uint8Array([0x00]));
+      result = await getp(transmit(signCommand));
       let signature = await getData(result, transmit);
-      console.log(signature);
+      console.log('Raw signature: ', signature);
+      let signaturePackage = concatenateUint8(packageAndHash[0], signature);
+      console.log('Complete signature: ', signaturePackage);
 
       // Get digital signature counter
       result = await getp(transmit(GET_DATA_DSC_APDU));
