@@ -133,10 +133,15 @@ goog.scope(function() {
       API.SCARD_PCI_T1;
   }
 
-  function parseResult(result) {
+  async function parseResult(result, transmit) {
     let data = result[1].slice(0, -2);
     let returnCode = result[1].slice(-2);
-    if (!(returnCode[0] == 0x90 && returnCode[1] == 0x00))
+    if (returnCode[0] === 0x61) {
+      console.log('Data continues with ' + returnCode[1] + ' bytes.');
+      let result = await getp(transmit(GET_RESPONSE_APDU));
+      let dataContinued = await parseResult(result, transmit);
+      data = data.concat(dataContinued);
+    } else if (!(returnCode[0] === 0x90 && returnCode[1] === 0x00))
       console.log('Operation returned specific status bytes:', returnCode);
     return data;
   }
@@ -185,12 +190,14 @@ goog.scope(function() {
   ];
   const GET_DATA_CARDHOLDER_APDU = [0x00, 0xCA, 0x00, 0x65, 0x00];
   const GET_DATA_URL_APDU = [0x00, 0xCA, 0x5F, 0x50, 0x00];
+  const GET_DATA_DSC_APDU = [0x00, 0xCA, 0x00, 0x7A, 0x00];
   const VERIFY_APDU = [0x00, 0x20, 0x00, 0x81];
   const PSO_CDS_APDU = [0x00, 0x2A, 0x9E, 0x9A];
   const RSA_SHA1_DIGEST_INFO = [0x30, 0x51, 0x30, 0x0D, 0x06, 0x09, 0x60,
     0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04,
     0x40
   ];
+  const GET_RESPONSE_APDU = [0x00, 0xC0, 0x00, 0x00, 0x00];
 
   /**
    * This function is executed when the context for using PC/SC-Lite client API is
@@ -226,9 +233,11 @@ goog.scope(function() {
 
       // Request cardholder data and public key url
       result = await getp(transmit(GET_DATA_CARDHOLDER_APDU));
-      console.log(parseResult(result));
+      let data = await parseResult(result, transmit);
+      console.log(data);
       result = await getp(transmit(GET_DATA_URL_APDU));
-      let url = bytesToString(parseResult(result));
+      data = await parseResult(result, transmit);
+      let url = bytesToString(data);
       console.log('URL: ' + url);
 
       // Request PIN
@@ -245,7 +254,13 @@ goog.scope(function() {
 
       // Verify PIN
       result = await getp(transmit(VERIFY_APDU.concat(pinBytes)));
-      console.log(parseResult(result));
+      data = await parseResult(result, transmit);
+      console.log(data);
+
+      // Get digital signature counter
+      result = await getp(transmit(GET_DATA_DSC_APDU));
+      data = await parseResult(result, transmit);
+      console.log('DSC: ', data);
 
       // Sign
       // let message = 'Hello YubiKey!';
@@ -260,8 +275,13 @@ goog.scope(function() {
       let digestInfo = RSA_SHA1_DIGEST_INFO.concat(hash);
       result = await getp(transmit(PSO_CDS_APDU.concat([digestInfo.length])
         .concat(digestInfo).concat([0x00])));
-      let signature = parseResult(result);
+      let signature = await parseResult(result, transmit);
       console.log(signature);
+
+      // Get digital signature counter
+      result = await getp(transmit(GET_DATA_DSC_APDU));
+      data = await parseResult(result, transmit);
+      console.log('DSC: ', data);
 
       // Disconnect
       await getp(api.SCardDisconnect(sCardHandle, API.SCARD_LEAVE_CARD));
