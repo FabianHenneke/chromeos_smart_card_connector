@@ -42,6 +42,9 @@ goog.require('goog.log');
 goog.require('goog.log.Level');
 goog.require('goog.log.Logger');
 
+goog.require('goog.crypt.Sha512');
+
+
 goog.scope(function() {
 
   /** @const */
@@ -203,6 +206,13 @@ goog.scope(function() {
     return bytes;
   }
 
+  function uint16ToBytes(v_uint16) {
+    let bytes = new Uint8Array(2);
+    let view = new DataView(bytes.buffer);
+    view.setUint16(0, v_uint16);
+    return bytes;
+  }
+
   function concatenateUint8(...arrays) {
     const totalLength = arrays.reduce((total, array) => total + array.length,
       0);
@@ -238,6 +248,11 @@ goog.scope(function() {
   // Create the parts of an OpenPGP Version 4 Signature Packet for binary data
   // see: https://tools.ietf.org/html/rfc4880#section-5.2.3
   function createSignaturePackage(data, issuerBytes) {
+    const PACKET_HEADER = new Uint8Array([
+      0b10001001, /* ctb=89 */
+      /* Bits: 1 (fixed) | 0 (old package format) | 0b0010 = 2 (signature
+       * packet, tag=2) | 0b01 = 1 (two-octet length, hlen=3) */
+    ]);
     const SIGNATURE_PACKET_HEADER = new Uint8Array([
       0x04, /* version number */
       0x00, /* signature type (fixed to binary) */
@@ -261,8 +276,11 @@ goog.scope(function() {
       CREATION_TIME_SUBPACKET_HEADER, timeBytes);
     console.log('Hashed part: ', hashedPart);
 
-    //const dataToHash = data.concat(hashedPart);
-    const hashBytes = /* TODO */ new Uint8Array([0, 0]);
+    let sha = new goog.crypt.Sha512();
+    sha.update(data);
+    sha.update(hashedPart);
+    const hashBytes = new Uint8Array(sha.digest());
+    console.log('Hash: ', hashBytes);
 
     const UNHASHED_SUBPACKETS_HEADER = new Uint8Array([
       0x00,
@@ -277,7 +295,45 @@ goog.scope(function() {
       ISSUER_SUBPACKET_HEADER, issuerBytes, hashBytes.slice(-2));
     console.log('Unhashed part: ', unhashedPart);
 
-    return [concatenateUint8(hashedPart, unhashedPart), hashBytes];
+    const packetBody = concatenateUint8(hashedPart, unhashedPart);
+    const packetHeader = concatenateUint8(PACKET_HEADER,
+      uint16ToBytes(packetBody.length + 258)); // TODO: Hash size might differ
+    console.log('Packed header: ', packetHeader);
+
+    return [concatenateUint8(packetHeader, packetBody), hashBytes];
+  }
+
+  function completeSignature(packet, rawSignature) {
+    let numBits = 2048;
+    // Reduce number of bits by one for each leading unset bit
+    // TODO: Does the length have to decrease if the first byte is 0?
+    for (let i = 0; i < rawSignature.length; i++) {
+      if ((rawSignature[i] & 1 << 7) !== 0)
+        break;
+      numBits--;
+      if ((rawSignature[i] & 1 << 6) !== 0)
+        break;
+      numBits--;
+      if ((rawSignature[i] & 1 << 5) !== 0)
+        break;
+      numBits--;
+      if ((rawSignature[i] & 1 << 4) !== 0)
+        break;
+      numBits--;
+      if ((rawSignature[i] & 1 << 3) !== 0)
+        break;
+      numBits--;
+      if ((rawSignature[i] & 1 << 2) !== 0)
+        break;
+      numBits--;
+      if ((rawSignature[i] & 1 << 1) !== 0)
+        break;
+      numBits--;
+      if ((rawSignature[i] & 1 << 0) !== 0)
+        break;
+      numBits--;
+    }
+    return concatenateUint8(packet, uint16ToBytes(numBits), rawSignature);
   }
 
   const SELECT_FILE_APDU = new Uint8Array([0x00, 0xA4, 0x04, 0x00, 0x06,
@@ -334,7 +390,7 @@ goog.scope(function() {
       // Request cardholder data and public key url
       result = await getp(transmit(GET_DATA_CARDHOLDER_APDU));
       let data = await getData(result, transmit);
-      console.log(data);
+      console.log(bytesToString(data));
       result = await getp(transmit(GET_DATA_URL_APDU));
       data = await getData(result, transmit);
       let url = bytesToString(data);
@@ -375,10 +431,10 @@ goog.scope(function() {
         digestInfo.length
       ]), digestInfo, new Uint8Array([0x00]));
       result = await getp(transmit(signCommand));
-      let signature = await getData(result, transmit);
-      console.log('Raw signature: ', signature);
-      let signaturePackage = concatenateUint8(packageAndHash[0], signature);
-      console.log('Complete signature: ', signaturePackage);
+      let rawSignature = await getData(result, transmit);
+      console.log('Raw signature: ', rawSignature);
+      let signature = completeSignature(packageAndHash[0], rawSignature);
+      console.log('Complete signature: ', signature);
 
       // Get digital signature counter
       result = await getp(transmit(GET_DATA_DSC_APDU));
@@ -388,6 +444,8 @@ goog.scope(function() {
       // Disconnect
       await getp(api.SCardDisconnect(sCardHandle, API.SCARD_LEAVE_CARD));
       await getp(api.SCardReleaseContext(sCardContext));
+
+      console.log(btoa(bytesToString(signature)));
     } catch (pcscError) {
       logPcscError(api, pcscError);
       return;
