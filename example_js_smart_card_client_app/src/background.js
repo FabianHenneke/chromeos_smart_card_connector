@@ -133,17 +133,27 @@ goog.scope(function() {
       API.SCARD_PCI_T1;
   }
 
-  async function parseResult(result, transmit) {
+  async function getData(result, transmit) {
     let data = result[1].slice(0, -2);
     let returnCode = result[1].slice(-2);
     if (returnCode[0] === 0x61) {
       console.log('Data continues with ' + returnCode[1] + ' bytes.');
       let result = await getp(transmit(GET_RESPONSE_APDU));
-      let dataContinued = await parseResult(result, transmit);
+      let dataContinued = await getData(result, transmit);
       data = data.concat(dataContinued);
     } else if (!(returnCode[0] === 0x90 && returnCode[1] === 0x00))
       console.log('Operation returned specific status bytes:', returnCode);
     return data;
+  }
+
+  function parseDSC(data) {
+    if (!(data.length === 7 && data[2] === 0x93 && data[3] === 0x03)) {
+      console.log(
+        'Error: Invalid response to request for digital signature counter'
+      );
+      return 0;
+    }
+    return data[6] + 0x100 * data[5] + 0x10000 * data[4];
   }
 
   function bytesToString(bytes) {
@@ -233,10 +243,10 @@ goog.scope(function() {
 
       // Request cardholder data and public key url
       result = await getp(transmit(GET_DATA_CARDHOLDER_APDU));
-      let data = await parseResult(result, transmit);
+      let data = await getData(result, transmit);
       console.log(data);
       result = await getp(transmit(GET_DATA_URL_APDU));
-      data = await parseResult(result, transmit);
+      data = await getData(result, transmit);
       let url = bytesToString(data);
       console.log('URL: ' + url);
 
@@ -254,13 +264,13 @@ goog.scope(function() {
 
       // Verify PIN
       result = await getp(transmit(VERIFY_APDU.concat(pinBytes)));
-      data = await parseResult(result, transmit);
+      data = await getData(result, transmit);
       console.log(data);
 
       // Get digital signature counter
       result = await getp(transmit(GET_DATA_DSC_APDU));
-      data = await parseResult(result, transmit);
-      console.log('DSC: ', data);
+      data = await getData(result, transmit);
+      console.log('DSC: ', parseDSC(data));
 
       // Sign
       // let message = 'Hello YubiKey!';
@@ -275,13 +285,13 @@ goog.scope(function() {
       let digestInfo = RSA_SHA1_DIGEST_INFO.concat(hash);
       result = await getp(transmit(PSO_CDS_APDU.concat([digestInfo.length])
         .concat(digestInfo).concat([0x00])));
-      let signature = await parseResult(result, transmit);
+      let signature = await getData(result, transmit);
       console.log(signature);
 
       // Get digital signature counter
       result = await getp(transmit(GET_DATA_DSC_APDU));
-      data = await parseResult(result, transmit);
-      console.log('DSC: ', data);
+      data = await getData(result, transmit);
+      console.log('DSC: ', parseDSC(data));
 
       // Disconnect
       await getp(api.SCardDisconnect(sCardHandle, API.SCARD_LEAVE_CARD));
