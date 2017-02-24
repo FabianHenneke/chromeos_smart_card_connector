@@ -170,7 +170,7 @@ goog.scope(function() {
   // Taken from:
   // http://stackoverflow.com/a/18729931
   function utf8ToBytes(str) {
-    var utf8 = [str.length];
+    var utf8 = [];
     for (var i = 0; i < str.length; i++) {
       var charcode = str.charCodeAt(i);
       if (charcode < 0x80) utf8.push(charcode);
@@ -274,13 +274,23 @@ goog.scope(function() {
     const hashedPart = concatenateUint8(
       SIGNATURE_PACKET_HEADER, HASHED_SUBPACKETS_HEADER,
       CREATION_TIME_SUBPACKET_HEADER, timeBytes);
+    console.log('Data: ', data);
     console.log('Hashed part: ', hashedPart);
 
     let sha = new goog.crypt.Sha512();
     sha.update(data);
     sha.update(hashedPart);
+    const trailer = concatenateUint8(new Uint8Array([0x04, 0xff]),
+      uint32ToBytes(hashedPart.length));
+    sha.update(trailer);
+    console.log('Trailer: ', trailer);
     const hashBytes = new Uint8Array(sha.digest());
     console.log('Hash: ', hashBytes);
+
+    sha = new goog.crypt.Sha512();
+    sha.update(utf8ToBytes('Hello YubiKey!'));
+    console.log('Message: ', utf8ToBytes('Hello YubiKey!'));
+    console.log('Hash (message): ', sha.digest());
 
     const UNHASHED_SUBPACKETS_HEADER = new Uint8Array([
       0x00,
@@ -292,13 +302,13 @@ goog.scope(function() {
     ]);
 
     const unhashedPart = concatenateUint8(UNHASHED_SUBPACKETS_HEADER,
-      ISSUER_SUBPACKET_HEADER, issuerBytes, hashBytes.slice(-2));
+      ISSUER_SUBPACKET_HEADER, issuerBytes, hashBytes.slice(0, 2));
     console.log('Unhashed part: ', unhashedPart);
 
     const packetBody = concatenateUint8(hashedPart, unhashedPart);
     const packetHeader = concatenateUint8(PACKET_HEADER,
       uint16ToBytes(packetBody.length + 258)); // TODO: Hash size might differ
-    console.log('Packed header: ', packetHeader);
+    console.log('Packet header: ', packetHeader);
 
     return [concatenateUint8(packetHeader, packetBody), hashBytes];
   }
@@ -405,16 +415,19 @@ goog.scope(function() {
 
       // Request PIN
       let pinBytes = [];
+      let pinLength = [];
       try {
         let pin = await SmartCardClientApp.PinDialog.Server.requestPin();
         pinBytes = utf8ToBytes(pin);
+        pinLength = new Uint8Array([pinBytes.length]);
       } catch (error) {
         console.log('PIN dialog: ' + error);
         return;
       }
 
       // Verify PIN
-      result = await getp(transmit(concatenateUint8(VERIFY_APDU, pinBytes)));
+      result = await getp(transmit(concatenateUint8(VERIFY_APDU,
+        concatenateUint8(pinLength, pinBytes))));
       data = await getData(result, transmit);
 
       // Get digital signature counter
